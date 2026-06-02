@@ -3,3 +3,7 @@ __pycache__/
 .DS_Store
 *.pyc
 .streamlit/secrets.toml
+.env
+chroma_db/
+chromadb/
+.cache/

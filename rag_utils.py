@@ -229,6 +229,76 @@ def get_question_keywords(question):
     return keywords
 
 
+def analyze_question(question):
+    keywords = sorted(get_question_keywords(question))
+
+    return {
+        "question": question,
+        "keywords": keywords,
+        "is_definition_question": is_definition_question(question),
+    }
+
+
+def calculate_keyword_overlap(question, text):
+    keywords = get_question_keywords(question)
+    if not keywords:
+        return 0
+
+    text_words = set(re.findall(r"[a-zA-Z0-9]+", text.lower()))
+    return len(text_words.intersection(keywords))
+
+
+def get_best_similarity(retrieved_chunks):
+    if not retrieved_chunks:
+        return 0.0
+
+    similarities = [
+        max(0.0, 1 - chunk["distance"])
+        for chunk in retrieved_chunks
+    ]
+    return max(similarities)
+
+
+def evaluate_evidence_quality(question, retrieved_chunks):
+    if not retrieved_chunks:
+        return {
+            "quality": "Weak",
+            "best_similarity": 0.0,
+            "keyword_overlap": 0,
+            "explanation": "No chunks were retrieved from the uploaded PDF.",
+        }
+
+    best_similarity = get_best_similarity(retrieved_chunks)
+    combined_text = " ".join(chunk["text"] for chunk in retrieved_chunks)
+    keyword_overlap = calculate_keyword_overlap(question, combined_text)
+
+    if best_similarity >= 0.55 and keyword_overlap >= 2:
+        quality = "Strong"
+        explanation = (
+            "The retrieved chunks have high semantic similarity and include "
+            "key terms from the question."
+        )
+    elif best_similarity >= 0.35 and keyword_overlap >= 1:
+        quality = "Medium"
+        explanation = (
+            "The retrieved chunks are somewhat related and include at least "
+            "one important question keyword."
+        )
+    else:
+        quality = "Weak"
+        explanation = (
+            "The retrieved chunks have low semantic similarity or do not include "
+            "enough key terms from the question."
+        )
+
+    return {
+        "quality": quality,
+        "best_similarity": best_similarity,
+        "keyword_overlap": keyword_overlap,
+        "explanation": explanation,
+    }
+
+
 def split_into_sentences(text):
     sentences = re.split(r"(?<=[.!?])\s+", text)
     return [clean_text(sentence) for sentence in sentences if clean_text(sentence)]
@@ -284,15 +354,26 @@ def score_sentence(sentence, question, chunk):
     return score
 
 
-def generate_fallback_answer(question, retrieved_chunks, max_sentences=3):
+def generate_fallback_answer(
+    question,
+    retrieved_chunks,
+    evidence_quality=None,
+    max_sentences=3,
+):
     if not retrieved_chunks:
         return (
             "The answer cannot be found from the uploaded PDF because no relevant "
             "evidence was retrieved."
         ), []
 
-    best_similarity = max(0.0, 1 - retrieved_chunks[0]["distance"])
-    if best_similarity < LOW_SIMILARITY_THRESHOLD:
+    if evidence_quality is None:
+        evidence_quality = evaluate_evidence_quality(question, retrieved_chunks)
+
+    best_similarity = evidence_quality["best_similarity"]
+    if (
+        evidence_quality["quality"] == "Weak"
+        or best_similarity < LOW_SIMILARITY_THRESHOLD
+    ):
         return WEAK_EVIDENCE_MESSAGE, []
 
     candidates = []
@@ -407,8 +488,19 @@ def generate_gemini_answer(question, retrieved_chunks):
     return response.text
 
 
-def generate_answer(question, retrieved_chunks, provider="Fallback only"):
+def generate_answer(
+    question,
+    retrieved_chunks,
+    provider="Fallback only",
+    evidence_quality=None,
+):
     retrieved_pages = sorted({chunk["page"] for chunk in retrieved_chunks})
+
+    if evidence_quality is None:
+        evidence_quality = evaluate_evidence_quality(question, retrieved_chunks)
+
+    if evidence_quality["quality"] == "Weak":
+        return WEAK_EVIDENCE_MESSAGE, []
 
     if provider == "OpenAI":
         answer = generate_openai_answer(question, retrieved_chunks)
@@ -420,4 +512,8 @@ def generate_answer(question, retrieved_chunks, provider="Fallback only"):
         if answer:
             return answer, retrieved_pages
 
-    return generate_fallback_answer(question, retrieved_chunks)
+    return generate_fallback_answer(
+        question,
+        retrieved_chunks,
+        evidence_quality=evidence_quality,
+    )

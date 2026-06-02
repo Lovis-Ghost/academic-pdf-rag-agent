@@ -2,8 +2,10 @@ import streamlit as st
 
 from rag_utils import (
     EMBEDDING_MODEL_NAME,
+    analyze_question,
     build_vector_store,
     create_chunks,
+    evaluate_evidence_quality,
     extract_pages_from_pdf,
     generate_answer,
     load_embedding_model,
@@ -96,10 +98,14 @@ retrieved_chunks = retrieve_chunks(
     top_k=top_k,
 )
 
+question_analysis = analyze_question(question)
+evidence_quality = evaluate_evidence_quality(question, retrieved_chunks)
+
 answer, source_pages = generate_answer(
     question=question,
     retrieved_chunks=retrieved_chunks,
     provider=answer_provider,
+    evidence_quality=evidence_quality,
 )
 
 st.subheader("Answer")
@@ -110,6 +116,58 @@ if source_pages:
         "Answer source page(s): "
         + ", ".join(str(page) for page in source_pages)
     )
+else:
+    st.info("Answer source page(s): No supported source page identified.")
+
+quality = evidence_quality["quality"]
+if quality == "Strong":
+    st.success(f"Evidence quality: {quality}")
+elif quality == "Medium":
+    st.warning(f"Evidence quality: {quality}")
+else:
+    st.warning(
+        "Evidence quality: Weak. The answer may not be supported by the uploaded PDF."
+    )
+
+st.subheader("Agent Workflow")
+
+with st.expander("Step 1: Question Understanding", expanded=True):
+    st.write(f"Question: {question}")
+    keywords = question_analysis["keywords"]
+    if keywords:
+        st.write("Extracted keywords: " + ", ".join(keywords))
+    else:
+        st.write("Extracted keywords: None")
+
+with st.expander("Step 2: Retrieval", expanded=True):
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Retrieved chunks", len(retrieved_chunks))
+    col2.metric("top_k", top_k)
+    col3.metric("Best similarity", f"{evidence_quality['best_similarity']:.4f}")
+
+with st.expander("Step 3: Evidence Quality Check", expanded=True):
+    st.write(f"Quality label: {quality}")
+    st.write(f"Keyword overlap: {evidence_quality['keyword_overlap']}")
+    st.write(evidence_quality["explanation"])
+    if quality == "Weak":
+        st.warning(
+            "The retrieved evidence is weak, so the answer should be treated as "
+            "unsupported unless better PDF evidence is retrieved."
+        )
+
+with st.expander("Step 4: Answer Generation", expanded=True):
+    st.write(f"Answer provider: {answer_provider}")
+    st.write("The app answers only from retrieved PDF evidence.")
+
+with st.expander("Step 5: Source Citation", expanded=True):
+    if source_pages:
+        st.write(
+            "Final answer source page(s): "
+            + ", ".join(str(page) for page in source_pages)
+        )
+    else:
+        st.write("Final answer source page(s): None")
+    st.write("Source pages are shown so the answer can be checked against the PDF.")
 
 st.subheader("Retrieved Evidence")
 

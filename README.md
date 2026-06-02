@@ -14,6 +14,8 @@ Academic PDF RAG Agent is a beginner-friendly Streamlit app that lets users uplo
 - Optionally use OpenAI or Gemini when API keys are available
 - Show source page numbers and expandable retrieved evidence
 - Display vector distances and similarity-style scores for retrieved chunks
+- Show an Agent Workflow panel for question analysis, retrieval, evidence checks, answer generation, and citation
+- Label retrieved evidence as Strong, Medium, or Weak before answering
 
 ## Tech Stack
 
@@ -37,6 +39,27 @@ Academic PDF RAG Agent is a beginner-friendly Streamlit app that lets users uplo
 9. The answer generator uses only the retrieved evidence.
 10. The app shows the answer, source pages, and expandable evidence sections.
 
+## Agent Workflow
+
+After each question, the app follows a simple agent-style workflow:
+
+1. Question Understanding: extract important keywords from the user question.
+2. Semantic Retrieval: embed the question and retrieve relevant PDF chunks from ChromaDB.
+3. Evidence Quality Check: compare semantic similarity and keyword overlap to label the evidence as Strong, Medium, or Weak.
+4. Grounded Answer Generation: answer only from retrieved PDF evidence, or refuse when the evidence is weak.
+5. Source Citation: show the page numbers used by the final answer.
+
+## Why This Is an AI Agent Project
+
+This project is not only a search app. It follows a controlled reasoning workflow before answering:
+
+- It understands the question by extracting keywords.
+- It retrieves semantically relevant PDF evidence.
+- It checks evidence quality before generating an answer.
+- It refuses or becomes cautious when the evidence is weak.
+- It grounds answers in retrieved PDF evidence.
+- It provides source pages so users can verify the answer.
+
 ## How to Run Locally
 
 Clone the repository and install dependencies:
@@ -57,7 +80,7 @@ Then open the local URL shown in the terminal.
 
 ## Optional API Keys
 
-The app works without an API key by using the built-in fallback answer generator. The fallback answer combines the most relevant retrieved chunks and includes this note:
+The app works without an API key by using the built-in fallback answer generator. The fallback answer selects the most relevant sentences from retrieved evidence and includes this note:
 
 ```text
 This answer is based only on the retrieved PDF evidence.
