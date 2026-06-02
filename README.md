@@ -65,8 +65,8 @@ This project is not only a search app. It follows a controlled reasoning workflo
 Clone the repository and install dependencies:
 
 ```bash
-git clone https://github.com/Lovis-Ghost/course-pdf-qa-assistant.git
-cd course-pdf-qa-assistant
+git clone https://github.com/Lovis-Ghost/academic-pdf-rag-agent.git
+cd academic-pdf-rag-agent
 pip install -r requirements.txt
 ```
 
@@ -135,7 +135,7 @@ pip install openai google-generativeai
 ## Project Structure
 
 ```text
-course-pdf-qa-assistant
+academic-pdf-rag-agent
 ├── app.py
 ├── rag_utils.py
 ├── README.md
