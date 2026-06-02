@@ -96,7 +96,7 @@ retrieved_chunks = retrieve_chunks(
     top_k=top_k,
 )
 
-answer = generate_answer(
+answer, source_pages = generate_answer(
     question=question,
     retrieved_chunks=retrieved_chunks,
     provider=answer_provider,
@@ -105,10 +105,9 @@ answer = generate_answer(
 st.subheader("Answer")
 st.write(answer)
 
-if retrieved_chunks:
-    source_pages = sorted({chunk["page"] for chunk in retrieved_chunks})
+if source_pages:
     st.info(
-        "Retrieved source page(s): "
+        "Answer source page(s): "
         + ", ".join(str(page) for page in source_pages)
     )
 

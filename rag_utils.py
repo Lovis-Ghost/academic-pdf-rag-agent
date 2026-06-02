@@ -1,3 +1,4 @@
+import importlib
 import os
 import re
 import uuid
@@ -10,6 +11,65 @@ from sentence_transformers import SentenceTransformer
 
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+LOW_SIMILARITY_THRESHOLD = 0.25
+
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "based",
+    "be",
+    "can",
+    "define",
+    "does",
+    "explain",
+    "for",
+    "from",
+    "how",
+    "in",
+    "is",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "what",
+    "when",
+    "where",
+    "why",
+}
+
+DEFINITION_PHRASES = [
+    " is ",
+    " are ",
+    " refers to ",
+    " means ",
+    " defined as ",
+    " can be described as ",
+]
+
+DEFINITION_NOISE_TERMS = [
+    "birth",
+    "born",
+    "died",
+    "conference",
+    "dartmouth",
+    "turing",
+    "history",
+    "references",
+    "pp.",
+    "vol.",
+    "article",
+]
+
+WEAK_EVIDENCE_MESSAGE = (
+    "The answer cannot be found confidently from the uploaded PDF. "
+    "The retrieved evidence appears weak or only loosely related."
+)
 
 
 def clean_text(text):
@@ -150,31 +210,134 @@ def get_secret_or_env(name):
     return os.getenv(name)
 
 
-def generate_fallback_answer(retrieved_chunks, max_chunks=3, max_chars=1800):
+def is_definition_question(question):
+    question_lower = question.strip().lower()
+    return question_lower.startswith(("what is", "define", "explain"))
+
+
+def get_question_keywords(question):
+    words = re.findall(r"[a-zA-Z0-9]+", question.lower())
+    keywords = {
+        word
+        for word in words
+        if word not in STOPWORDS and len(word) >= 2
+    }
+
+    if "ai" in keywords:
+        keywords.update({"artificial", "intelligence"})
+
+    return keywords
+
+
+def split_into_sentences(text):
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    return [clean_text(sentence) for sentence in sentences if clean_text(sentence)]
+
+
+def contains_definition_phrase(sentence):
+    padded_sentence = f" {sentence.lower()} "
+    return any(phrase in padded_sentence for phrase in DEFINITION_PHRASES)
+
+
+def sentence_keyword_overlap(sentence, keywords):
+    sentence_words = set(re.findall(r"[a-zA-Z0-9]+", sentence.lower()))
+    return len(sentence_words.intersection(keywords))
+
+
+def required_keyword_overlap(question, keywords):
+    question_words = set(re.findall(r"[a-zA-Z0-9]+", question.lower()))
+    if "ai" in question_words:
+        return 1
+
+    if is_definition_question(question) and len(keywords) >= 2:
+        return 2
+
+    return 1 if keywords else 0
+
+
+def score_sentence(sentence, question, chunk):
+    keywords = get_question_keywords(question)
+    overlap = sentence_keyword_overlap(sentence, keywords)
+    definition_question = is_definition_question(question)
+    sentence_lower = sentence.lower()
+    similarity = max(0.0, 1 - chunk["distance"])
+
+    if overlap < required_keyword_overlap(question, keywords):
+        return None
+
+    score = similarity + (overlap * 2.0)
+
+    if definition_question and contains_definition_phrase(sentence):
+        score += 2.0
+
+    if definition_question:
+        for term in DEFINITION_NOISE_TERMS:
+            if term in sentence_lower:
+                score -= 2.5
+
+    word_count = len(sentence.split())
+    if word_count > 45:
+        score -= 1.0
+    elif word_count <= 30:
+        score += 0.5
+
+    return score
+
+
+def generate_fallback_answer(question, retrieved_chunks, max_sentences=3):
     if not retrieved_chunks:
         return (
             "The answer cannot be found from the uploaded PDF because no relevant "
             "evidence was retrieved."
-        )
+        ), []
 
-    best_distance = retrieved_chunks[0]["distance"]
-    if best_distance > 0.85:
-        return (
-            "The answer cannot be found confidently from the uploaded PDF. "
-            "The retrieved evidence appears weak or only loosely related."
-        )
+    best_similarity = max(0.0, 1 - retrieved_chunks[0]["distance"])
+    if best_similarity < LOW_SIMILARITY_THRESHOLD:
+        return WEAK_EVIDENCE_MESSAGE, []
 
-    selected = retrieved_chunks[:max_chunks]
-    combined = " ".join(chunk["text"] for chunk in selected)
-    combined = combined[:max_chars].strip()
+    candidates = []
 
-    pages = sorted({chunk["page"] for chunk in selected})
-    page_text = ", ".join(str(page) for page in pages)
+    for chunk in retrieved_chunks:
+        for sentence in split_into_sentences(chunk["text"]):
+            score = score_sentence(sentence, question, chunk)
+            if score is None:
+                continue
+
+            candidates.append({
+                "page": chunk["page"],
+                "sentence": sentence,
+                "score": score,
+            })
+
+    candidates = sorted(candidates, key=lambda item: item["score"], reverse=True)
+
+    selected = []
+    used_sentences = set()
+
+    for candidate in candidates:
+        sentence_key = candidate["sentence"].lower()
+        if sentence_key in used_sentences:
+            continue
+
+        if candidate["score"] < 2.0:
+            continue
+
+        selected.append(candidate)
+        used_sentences.add(sentence_key)
+
+        if len(selected) >= max_sentences:
+            break
+
+    if not selected:
+        return WEAK_EVIDENCE_MESSAGE, []
+
+    answer_text = " ".join(item["sentence"] for item in selected)
+    pages = sorted({item["page"] for item in selected})
 
     return (
         "This answer is based only on the retrieved PDF evidence.\n\n"
-        f"Relevant evidence from page(s) {page_text}: {combined}"
-    )
+        f"{answer_text}"
+    ), pages
 
 
 def generate_openai_answer(question, retrieved_chunks):
@@ -183,11 +346,15 @@ def generate_openai_answer(question, retrieved_chunks):
         return None
 
     try:
-        from openai import OpenAI
+        openai_module = importlib.import_module("openai")
     except ImportError:
         return None
 
     evidence = format_evidence_for_prompt(retrieved_chunks)
+    OpenAI = getattr(openai_module, "OpenAI", None)
+    if OpenAI is None:
+        return None
+
     client = OpenAI(api_key=api_key)
 
     response = client.chat.completions.create(
@@ -222,7 +389,7 @@ def generate_gemini_answer(question, retrieved_chunks):
         return None
 
     try:
-        import google.generativeai as genai
+        genai = importlib.import_module("google.generativeai")
     except ImportError:
         return None
 
@@ -241,14 +408,16 @@ def generate_gemini_answer(question, retrieved_chunks):
 
 
 def generate_answer(question, retrieved_chunks, provider="Fallback only"):
+    retrieved_pages = sorted({chunk["page"] for chunk in retrieved_chunks})
+
     if provider == "OpenAI":
         answer = generate_openai_answer(question, retrieved_chunks)
         if answer:
-            return answer
+            return answer, retrieved_pages
 
     if provider == "Gemini":
         answer = generate_gemini_answer(question, retrieved_chunks)
         if answer:
-            return answer
+            return answer, retrieved_pages
 
-    return generate_fallback_answer(retrieved_chunks)
+    return generate_fallback_answer(question, retrieved_chunks)
