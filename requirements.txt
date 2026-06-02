@@ -1,4 +1,6 @@
 streamlit
 pymupdf
-scikit-learn
+chromadb
+sentence-transformers
+numpy
 pandas
